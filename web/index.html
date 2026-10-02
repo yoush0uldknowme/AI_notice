@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>CodeBuddy 通知管理面板</title>
+<style>
+  :root { --line:#e2e5ea; --bg:#f6f7f9; --card:#fff; --txt:#1c2330; --mut:#69707d; --blue:#185fa5; --grn:#2e8b57; --red:#c0392b; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--txt); padding:24px; }
+  .wrap { max-width:760px; margin:0 auto; }
+  h1 { font-size:18px; margin-bottom:4px; }
+  .sub { color:var(--mut); font-size:12px; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  input[type=text] { flex:1; min-width:120px; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:13px; }
+  button { padding:7px 14px; border:1px solid var(--line); border-radius:8px; background:#fff; cursor:pointer; font-size:13px; }
+  button.pri { background:var(--blue); color:#fff; border-color:var(--blue); }
+  button.dng { color:var(--red); border-color:#e6b8b2; }
+  button:hover { filter:brightness(0.96); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .srv { border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; background:#fff; }
+  .srv .head { display:flex; justify-content:space-between; align-items:center; }
+  .srv .name { font-weight:600; }
+  .badge { font-size:12px; padding:2px 10px; border-radius:99px; }
+  .b-deployed { background:#e4f2e9; color:var(--grn); }
+  .b-undeployed { background:#eef0f3; color:var(--mut); }
+  .b-failed { background:#fbe9e7; color:var(--red); }
+  .srv .detail { font-size:12px; color:var(--mut); margin-top:6px; white-space:pre-wrap; word-break:break-all; max-height:80px; overflow:auto; }
+  .srv .ops { margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; }
+  .msg { font-size:12px; color:var(--mut); margin-top:6px; white-space:pre-wrap; }
+  .toast { position:fixed; right:20px; bottom:20px; background:#2c3340; color:#fff; padding:10px 18px; border-radius:10px; font-size:13px; opacity:0; transition:.3s; pointer-events:none; }
+  .toast.show { opacity:1; }
+  .ver { float:right; font-size:12px; color:var(--mut); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CodeBuddy 通知管理面板 <span class="ver" id="ver"></span></h1>
+  <div class="sub">部署 = 在服务器上安装 CodeBuddy 钩子（任务完成/审批 → ntfy → 手表）。需要服务器已配置免密 SSH。</div>
+
+  <div class="card">
+    <div class="row">
+      <button class="pri" onclick="importSSH()">从 ~/.ssh/config 导入</button>
+      <input type="text" id="addName" placeholder="名称(如: 201)">
+      <input type="text" id="addHost" placeholder="SSH地址(如: 201 或 IP)">
+      <button onclick="add()">添加</button>
+      <span style="flex:1"></span>
+      <button onclick="checkUpdate()">检查更新</button>
+    </div>
+    <div class="msg" id="addMsg"></div>
+  </div>
+
+  <div id="list"></div>
+
+  <div class="card">
+    <div class="row">
+      <input type="text" id="cfgTopic" placeholder="ntfy 频道名" style="flex:1">
+      <input type="text" id="cfgRepo" placeholder="GitHub 仓库(如: yourname/notice-panel)" style="flex:1">
+      <button onclick="saveConfig()">保存配置</button>
+    </div>
+    <div class="msg">频道名改动后需对已部署的服务器"重新部署"才会生效。GitHub 仓库留空则不检查更新。</div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let CFG = {};
+function toast(t) {
+  const el = document.getElementById("toast");
+  el.textContent = t; el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 2500);
+}
+async function api(path, body) {
+  const opt = body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body||{})} : {};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+
+async function loadAll() {
+  CFG = await api("/api/config");
+  document.getElementById("cfgTopic").value = CFG.topic || "";
+  document.getElementById("cfgRepo").value = CFG.github_repo || "";
+  const d = await api("/api/servers");
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  if (!d.servers.length) {
+    list.innerHTML = '<div class="card" style="color:var(--mut)">还没有服务器。点上方"从 ~/.ssh/config 导入"或手动添加。</div>';
+    return;
+  }
+  for (const s of d.servers) {
+    const badge = {deployed:["b-deployed","✅ 已部署"], undeployed:["b-undeployed","⬜ 未部署"], failed:["b-failed","❌ 部署失败"]}[s.status] || ["b-undeployed", s.status];
+    const div = document.createElement("div");
+    div.className = "srv";
+    div.innerHTML = `
+      <div class="head">
+        <span class="name">${esc(s.name)}</span>
+        <span class="badge ${badge[0]}">${badge[1]}</span>
+      </div>
+      <div class="msg">主机: ${esc(s.host)} ${s.last_deploy ? "｜上次部署: " + esc(s.last_deploy) : ""}</div>
+      ${s.detail ? `<div class="detail">${esc(s.detail)}</div>` : ""}
+      <div class="ops">
+        <button class="pri" onclick="act('deploy','${esc(s.name)}',this)">部署</button>
+        <button onclick="act('test','${esc(s.name)}',this)">测试通知</button>
+        <button onclick="act('uninstall','${esc(s.name)}',this)">卸载钩子</button>
+        <button class="dng" onclick="removeSrv('${esc(s.name)}')">移除记录</button>
+      </div>`;
+    list.appendChild(div);
+  }
+}
+async function importSSH() {
+  const r = await api("/api/import_ssh");
+  toast(r.added && r.added.length ? `已导入: ${r.added.join(", ")}` : `发现 ${r.found.length} 个主机, 无新增`);
+  loadAll();
+}
+async function add() {
+  const name = document.getElementById("addName").value.trim();
+  const host = document.getElementById("addHost").value.trim();
+  if (!name || !host) { toast("名称和地址都要填"); return; }
+  const r = await api("/api/add", {name, host});
+  if (r.ok) { document.getElementById("addName").value = ""; document.getElementById("addHost").value = ""; loadAll(); }
+  else toast(r.error);
+}
+async function removeSrv(name) {
+  if (!confirm(`移除 ${name} 的部署记录？(服务器上的钩子不会卸载, 可先点"卸载钩子")`)) return;
+  await api("/api/remove", {name}); loadAll();
+}
+async function act(action, name, btn) {
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = "处理中...";
+  try {
+    const r = await api("/api/" + action, {name});
+    toast(r.ok ? (r.output ? r.output.split("\n").pop() : "完成") : (r.error || "失败, 详情见卡片"));
+  } catch (e) { toast("请求失败: " + e); }
+  btn.disabled = false; btn.textContent = old;
+  loadAll();
+}
+async function saveConfig() {
+  const r = await api("/api/config", {
+    topic: document.getElementById("cfgTopic").value.trim(),
+    github_repo: document.getElementById("cfgRepo").value.trim()
+  });
+  toast(r.ok ? "配置已保存" : "保存失败");
+}
+async function checkUpdate() {
+  const r = await api("/api/check_update");
+  if (!r.configured) { toast("请先在下方配置 GitHub 仓库地址"); return; }
+  if (r.updateAvailable) toast(`有新版本: ${r.latest} (当前 ${r.current}), 请运行 git pull 或点更新`);
+  else if (r.latest) toast(`已是最新版本 ${r.current}`);
+  else toast(r.msg || "检查失败");
+}
+loadAll();
+api("/api/check_update").then(r => {
+  document.getElementById("ver").textContent = r.current ? ("v" + r.current + (r.updateAvailable ? " ← 有新版 " + r.latest : "")) : "";
+});
+</script>
+</body>
+</html>

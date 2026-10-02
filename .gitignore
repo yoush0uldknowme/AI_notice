@@ -1,0 +1,7 @@
+panel_data/
+__pycache__/
+*.pyc
+*.log
+build/
+dist/
+*.spec
