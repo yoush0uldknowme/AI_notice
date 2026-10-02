@@ -245,6 +245,47 @@ class Tray:
         self.icon.run_detached()
 
 
+# ---------------- 服务器卡片 ----------------
+class ServerCard(ctk.CTkFrame):
+    def __init__(self, master, info, app):
+        super().__init__(master, fg_color="#FFFFFF", corner_radius=10,
+                         border_width=1, border_color="#E5E7EB")
+        self.info = info
+        self.app = app
+        self.pack(fill="x", padx=2, pady=5)
+
+        left = ctk.CTkFrame(self, fg_color="transparent")
+        left.pack(side="left", fill="x", expand=True, padx=14, pady=10)
+
+        name_row = ctk.CTkFrame(left, fg_color="transparent")
+        name_row.pack(anchor="w")
+        ctk.CTkLabel(name_row, text=info["name"], font=("Microsoft YaHei UI", 13, "bold"),
+                     text_color="#111827").pack(side="left")
+        txt, color = BADGE.get(info.get("status", "undeployed"),
+                               ("● " + info.get("status", ""), C_MUT))
+        ctk.CTkLabel(name_row, text=txt, font=("Microsoft YaHei UI", 11),
+                     text_color=color).pack(side="left", padx=10)
+
+        last = f"　上次部署: {info['last_deploy']}" if info.get("last_deploy") else ""
+        ctk.CTkLabel(left, text=f"主机: {info['host']}{last}",
+                     font=("Microsoft YaHei UI", 11), text_color=C_MUT,
+                     anchor="w").pack(anchor="w")
+
+        right = ctk.CTkFrame(self, fg_color="transparent")
+        right.pack(side="right", padx=12)
+        ctk.CTkButton(right, text="部署", width=72,
+                      command=lambda: app.run_op("deploy", info["name"])).pack(pady=2)
+        ctk.CTkButton(right, text="测试", width=72, fg_color="#F3F4F6", text_color="#111827",
+                      hover_color="#E5E7EB",
+                      command=lambda: app.run_op("test", info["name"])).pack(pady=2)
+        ctk.CTkButton(right, text="卸载", width=72, fg_color="#F3F4F6", text_color="#111827",
+                      hover_color="#E5E7EB",
+                      command=lambda: app.run_op("uninstall", info["name"])).pack(pady=2)
+        ctk.CTkButton(right, text="移除记录", width=72, fg_color="#F3F4F6", text_color="#DC2626",
+                      hover_color="#FDE8E8",
+                      command=lambda: app.remove_server(info["name"])).pack(pady=2)
+
+
 # ---------------- GUI ----------------
 class App(ctk.CTk):
     def __init__(self, watcher):
@@ -514,10 +555,11 @@ class App(ctk.CTk):
 
 # ---------------- 入口 ----------------
 def main():
-    # 单实例互斥
+    # 单实例互斥: 用 use_last_error=True 才能可靠拿到 LastError
     import ctypes
-    ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
-    if ctypes.windll.kernel32.GetLastError() == 183:
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
         root = ctk.CTk()
         root.withdraw()
         from tkinter import messagebox
