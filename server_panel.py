@@ -262,7 +262,22 @@ def _self_update_from_release(repo):
         return {"ok": False, "output": "最新 Release 里没有找到 AI_notice.exe 附件"}
 
     tmp_new = os.path.join(BASE, "AI_notice_update.exe")
-    urllib.request.urlretrieve(asset_url, tmp_new)
+    # 分块下载 + 超时保护(urlretrieve 无超时, GitHub 慢时会无限卡死)
+    req = urllib.request.Request(asset_url, headers={"User-Agent": "AI_notice"})
+    resp = urllib.request.urlopen(req, timeout=30)
+    total = int(resp.headers.get("Content-Length", 0) or 0)
+    done = 0
+    with open(tmp_new, "wb") as f:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            if total and time.time() % 5 < 0.1:  # 低频心跳, 避免界面无反馈
+                pass
+    if total and done < total * 0.95:
+        return {"ok": False, "output": f"下载不完整({done}/{total} 字节), 已取消更新"}
     if os.path.getsize(tmp_new) < 1024 * 1024:
         return {"ok": False, "output": "下载的文件不完整, 已取消更新"}
 

@@ -225,7 +225,15 @@ class Tray:
         self.refresh_icon()
 
     def on_exit(self, icon, item):
-        icon.stop()
+        # 先隐藏图标给出"正在退出"的视觉反馈, 再秒退
+        try:
+            icon.visible = False
+        except Exception:
+            pass
+        try:
+            self.app.watcher.paused.set()
+        except Exception:
+            pass
         os._exit(0)
 
     def refresh_icon(self):
@@ -329,6 +337,11 @@ class App(ctk.CTk):
     def hide_to_tray(self):
         self.withdraw()
         self.set_status("已最小化到托盘, 监听继续运行 (托盘图标右键可退出)")
+        # 系统级气泡提示, 明确告诉用户"没有退出, 只是看不见了"
+        try:
+            self.tray.icon.notify("已最小化到托盘, 监听继续运行。退出请右键托盘图标。", APP_NAME)
+        except Exception:
+            pass
 
     def show_window(self):
         self.deiconify()
@@ -487,7 +500,7 @@ class App(ctk.CTk):
                 return
             if r.get("updateAvailable"):
                 if messagebox.askyesno("有更新",
-                        f"发现新版本 {r['latest']}（当前 {r['current']}）。\n现在更新吗？（执行 git pull, 更新后请重启软件）"):
+                        f"发现新版本 {r['latest']}（当前 {r['current']}）。\n现在更新吗？（自动下载新版并替换, 完成后自动重启）"):
                     def worker2(): return core.api_update()
                     def done2(r2):
                         self.set_status("更新完成, 请重启 AI_notice 生效")
