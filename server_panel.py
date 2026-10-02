@@ -244,8 +244,15 @@ def api_check_update():
     except Exception as e:
         return {"ok": True, "configured": True, "current": cur, "latest": None,
                 "updateAvailable": False, "msg": f"检查失败(GitHub 连不上?): {e}"}
+    # 真正的版本大小比较: 只有远端比当前"新"才提示, 防止远端是旧版本号时误报
+    def vt(v):
+        try:
+            return tuple(int(x) for x in str(v).split("."))
+        except Exception:
+            return (0,)
+    newer = latest != "?" and vt(latest) > vt(cur)
     return {"ok": True, "configured": True, "current": cur, "latest": latest,
-            "updateAvailable": latest != cur and latest != "?", "msg": ""}
+            "updateAvailable": newer, "msg": ""}
 
 
 def _self_update_from_release(repo):
