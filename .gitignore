@@ -5,3 +5,4 @@ __pycache__/
 build/
 dist/
 *.spec
+AI_notice_new.exe
