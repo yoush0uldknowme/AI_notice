@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import sys
 import threading
@@ -242,9 +243,11 @@ class Tray:
         self.icon.title = f"{APP_NAME} ({st})"
 
     def run(self):
-        # pystray 的 run_detached 不会自动显示图标, 必须手动设 visible
-        self.icon.visible = True
-        self.icon.run_detached()
+        # pystray 的 run_detached 不会自动显示图标, 通过 setup 回调在循环就绪时点亮
+        self.icon.run_detached(setup=self._tray_ready)
+
+    def _tray_ready(self, icon):
+        icon.visible = True
 
 
 # ---------------- 服务器卡片 ----------------
@@ -556,17 +559,42 @@ class App(ctk.CTk):
 
 
 # ---------------- 入口 ----------------
+def _kill_stale_instances():
+    """终止除自己以外的所有 AI_notice 残留进程(僵尸自愈)"""
+    import subprocess, re
+    r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq AI_notice.exe", "/FO", "CSV"],
+                       capture_output=True)
+    pids = re.findall(r'"AI_notice\.exe","(\d+)"', r.stdout.decode("gbk", errors="replace"))
+    me = os.getpid()
+    killed = 0
+    for pid in pids:
+        if int(pid) != me:
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+                killed += 1
+            except Exception:
+                pass
+    return killed
+
+
 def main():
     # 单实例互斥: 用 use_last_error=True 才能可靠拿到 LastError
     import ctypes
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateMutexW(None, False, MUTEX_NAME)
     if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        root = ctk.CTk()
-        root.withdraw()
-        from tkinter import messagebox
-        messagebox.showinfo("AI_notice", "AI_notice 已经在运行了（请看系统托盘）。")
-        return
+        # 互斥锁被占: 大概率是残留僵尸实例(图标隐藏/监听已死),
+        # 自动清理后重试一次, 而不是弹窗放弃
+        _kill_stale_instances()
+        time.sleep(2)
+        kernel32.CreateMutexW(None, False, MUTEX_NAME)
+        if ctypes.get_last_error() == 183:
+            root = ctk.CTk()
+            root.withdraw()
+            from tkinter import messagebox
+            messagebox.showinfo("AI_notice", "AI_notice 已在运行且无法自动接管，"
+                                             "请用任务管理器结束所有 AI_notice.exe 后重试。")
+            return
 
     cleanup_legacy_autostart()
 
