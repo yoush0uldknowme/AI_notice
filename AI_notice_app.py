@@ -242,6 +242,8 @@ class Tray:
         self.icon.title = f"{APP_NAME} ({st})"
 
     def run(self):
+        # pystray 的 run_detached 不会自动显示图标, 必须手动设 visible
+        self.icon.visible = True
         self.icon.run_detached()
 
 
