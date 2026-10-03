@@ -704,24 +704,71 @@ class App(ctk.CTk):
 
 
 # ---------------- 入口 ----------------
-ACTIVATION_PORT = 8531  # 本机回环端口: 第二实例通知第一实例弹出窗口
+ACTIVATION_PORT = 8531  # 本机回环端口: 实例间通信(唤起窗口/查询版本/请求退出)
+
+
+def _vt(v):
+    """版本字符串 -> 可比较元组"""
+    try:
+        return tuple(int(x) for x in str(v).strip().lstrip("v").split("."))
+    except Exception:
+        return (0,)
+
+
+def _talk(cmd):
+    """向已运行实例发指令。返回 (是否连上, 回复文本)"""
+    import socket
+    try:
+        s = socket.create_connection(("127.0.0.1", ACTIVATION_PORT), timeout=1.5)
+        s.settimeout(2)
+        s.sendall(cmd.encode())
+        data = s.recv(64)
+        s.close()
+        return True, data.decode(errors="replace").strip()
+    except Exception:
+        return False, ""
 
 
 def _activate_running():
     """通知已运行的实例弹出窗口。返回 True=已有实例接管(本实例应退出)"""
-    import socket
-    try:
-        s = socket.create_connection(("127.0.0.1", ACTIVATION_PORT), timeout=1.5)
-        s.sendall(b"AI_NOTICE_SHOW")
-        data = s.recv(64)
-        s.close()
-        return data == b"OK"
-    except Exception:
-        return False
+    ok, _ = _talk("AI_NOTICE_SHOW")
+    return ok
+
+
+def _takeover_or_activate(my_version):
+    """版本感知接管:
+    - 无运行实例 -> 本实例启动
+    - 运行中实例版本 >= 自己 -> 唤起其窗口, 本实例退出
+    - 运行中实例版本 < 自己(旧实例霸着位子) -> 请求其退出, 本实例接管
+      (老协议实例不认识退出指令时, 兜底强杀)
+    """
+    alive, ver = _talk("AI_NOTICE_VERSION")
+    if not alive:
+        return  # 没有运行实例(或端口空闲), 正常启动
+    if _vt(ver) >= _vt(my_version):
+        _talk("AI_NOTICE_SHOW")  # 唤起对方的窗口即可
+        return True
+    # 旧版本在跑: 请求退出
+    _talk("AI_NOTICE_EXIT")
+    time.sleep(1.5)
+    alive2, _ = _talk("AI_NOTICE_VERSION")
+    if alive2:
+        # 老协议实例不理会退出指令 -> 兜底强杀
+        import subprocess
+        r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq AI_notice.exe", "/FO", "CSV"],
+                           capture_output=True)
+        import re
+        for pid in re.findall(r'"AI_notice\.exe","(\d+)"', r.stdout.decode("gbk", errors="replace")):
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except Exception:
+                pass
+        time.sleep(1.5)
+    return False
 
 
 def _start_activation_listener(app, log):
-    """主实例监听激活请求: 第二实例启动时唤起本窗口"""
+    """主实例监听实例间指令: SHOW=唤起窗口 / VERSION=报版本 / EXIT=请求退出"""
     import socket
     srv = socket.socket()
     srv.bind(("127.0.0.1", ACTIVATION_PORT))
@@ -730,10 +777,20 @@ def _start_activation_listener(app, log):
         while True:
             try:
                 conn, _ = srv.accept()
-                data = conn.recv(64)
-                if data == b"AI_NOTICE_SHOW":
+                data = conn.recv(64).decode(errors="replace").strip()
+                if data == "AI_NOTICE_SHOW":
                     conn.sendall(b"OK")
                     app.after(0, app.show_window)
+                elif data == "AI_NOTICE_VERSION":
+                    conn.sendall(core.APP_VERSION.encode())
+                elif data == "AI_NOTICE_EXIT":
+                    conn.sendall(b"OK")
+                    conn.close()
+                    try:
+                        tray.icon.visible = False
+                    except Exception:
+                        pass
+                    os._exit(0)
                 conn.close()
             except Exception as e:
                 log(f"激活监听出错(继续): {e}")
@@ -742,8 +799,9 @@ def _start_activation_listener(app, log):
 
 
 def main():
-    # 单实例(唤起式): 已有实例 -> 让它弹出窗口, 本实例退出。互杀设计已废弃。
-    if _activate_running():
+    # 单实例(版本感知接管): 双击新 exe 时, 旧版本实例自动退出让位,
+    # 保证"打开 = 一定用上双击的那个版本"
+    if _takeover_or_activate(core.APP_VERSION):
         return
 
     cleanup_legacy_autostart()

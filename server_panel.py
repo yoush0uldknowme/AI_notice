@@ -35,7 +35,7 @@ SSH_CONFIG = os.path.expanduser("~/.ssh/config")
 PORT = 8530
 
 # 当前版本号(单一来源, exe 内嵌; version.json 仅用于 git 仓库用户的对照)
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 
 # 配置/服务器列表文件读写锁: 多线程(GUI+监听+托盘)共享, 防止读半截写坏
 _io_lock = threading.Lock()
