@@ -13,7 +13,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import socket
 import sys
 import threading
@@ -28,7 +27,6 @@ import pystray
 import server_panel as core
 
 APP_NAME = "AI_notice"
-MUTEX_NAME = "AI_notice_single_instance"
 
 C_MUT = "#6B7280"
 C_OK = "#16A34A"
@@ -103,14 +101,17 @@ class Watcher:
         self.db_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Windows\Notifications")
         self.tmp = os.path.join(core.DATA, "_watch_tmp")
         os.makedirs(self.tmp, exist_ok=True)
+        # 全局复制锁: 监听线程/扫描线程共享同一临时目录, 任何时刻只允许一个复制
+        self._copy_lock = threading.Lock()
 
     def _copy_db(self):
-        for f in ("wpndatabase.db", "wpndatabase.db-wal", "wpndatabase.db-shm"):
-            try:
-                shutil.copy2(os.path.join(self.db_dir, f), os.path.join(self.tmp, f))
-            except Exception:
-                pass
-        return os.path.exists(os.path.join(self.tmp, "wpndatabase.db"))
+        with self._copy_lock:
+            for f in ("wpndatabase.db", "wpndatabase.db-wal", "wpndatabase.db-shm"):
+                try:
+                    shutil.copy2(os.path.join(self.db_dir, f), os.path.join(self.tmp, f))
+                except Exception as e:
+                    self.log_fn(f"复制通知数据库失败({f}): {e}")
+            return os.path.exists(os.path.join(self.tmp, "wpndatabase.db"))
 
     def _read_new(self, last_order):
         import sqlite3
@@ -145,14 +146,19 @@ class Watcher:
         return True
 
     def list_known_apps(self):
-        """从通知数据库列出所有曾发过通知的应用(供勾选界面用)"""
-        if not self._copy_db():
-            raise RuntimeError("无法读取系统通知数据库")
+        """列出所有曾发过通知的应用。
+        直接查询监听线程每 5 秒维护的最新副本(加锁防撞车), 不再自行复制。
+        副本不存在时(刚启动未满一个周期)才触发一次加锁复制。"""
         import sqlite3
-        con = sqlite3.connect(os.path.join(self.tmp, "wpndatabase.db"))
-        rows = con.execute(
-            'SELECT DISTINCT PrimaryId FROM NotificationHandler ORDER BY PrimaryId').fetchall()
-        con.close()
+        db = os.path.join(self.tmp, "wpndatabase.db")
+        if not os.path.exists(db) and not self._copy_db():
+            raise RuntimeError("无法读取系统通知数据库")
+        con = sqlite3.connect(db)
+        try:
+            rows = con.execute(
+                'SELECT DISTINCT PrimaryId FROM NotificationHandler ORDER BY PrimaryId').fetchall()
+        finally:
+            con.close()
         return [r[0] for r in rows if r[0]]
 
     def loop(self):
@@ -686,42 +692,47 @@ class App(ctk.CTk):
 
 
 # ---------------- 入口 ----------------
-def _kill_stale_instances():
-    """终止除自己以外的所有 AI_notice 残留进程(僵尸自愈)"""
-    import subprocess, re
-    r = subprocess.run(["tasklist", "/FI", "IMAGENAME eq AI_notice.exe", "/FO", "CSV"],
-                       capture_output=True)
-    pids = re.findall(r'"AI_notice\.exe","(\d+)"', r.stdout.decode("gbk", errors="replace"))
-    me = os.getpid()
-    killed = 0
-    for pid in pids:
-        if int(pid) != me:
+ACTIVATION_PORT = 8531  # 本机回环端口: 第二实例通知第一实例弹出窗口
+
+
+def _activate_running():
+    """通知已运行的实例弹出窗口。返回 True=已有实例接管(本实例应退出)"""
+    import socket
+    try:
+        s = socket.create_connection(("127.0.0.1", ACTIVATION_PORT), timeout=1.5)
+        s.sendall(b"AI_NOTICE_SHOW")
+        data = s.recv(64)
+        s.close()
+        return data == b"OK"
+    except Exception:
+        return False
+
+
+def _start_activation_listener(app, log):
+    """主实例监听激活请求: 第二实例启动时唤起本窗口"""
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", ACTIVATION_PORT))
+    srv.listen(4)
+    def loop():
+        while True:
             try:
-                os.kill(int(pid), signal.SIGTERM)
-                killed += 1
-            except Exception:
-                pass
-    return killed
+                conn, _ = srv.accept()
+                data = conn.recv(64)
+                if data == b"AI_NOTICE_SHOW":
+                    conn.sendall(b"OK")
+                    app.after(0, app.show_window)
+                conn.close()
+            except Exception as e:
+                log(f"激活监听出错(继续): {e}")
+                time.sleep(1)
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def main():
-    # 单实例互斥: 用 use_last_error=True 才能可靠拿到 LastError
-    import ctypes
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW(None, False, MUTEX_NAME)
-    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        # 互斥锁被占: 大概率是残留僵尸实例(图标隐藏/监听已死),
-        # 自动清理后重试一次, 而不是弹窗放弃
-        _kill_stale_instances()
-        time.sleep(2)
-        kernel32.CreateMutexW(None, False, MUTEX_NAME)
-        if ctypes.get_last_error() == 183:
-            root = ctk.CTk()
-            root.withdraw()
-            from tkinter import messagebox
-            messagebox.showinfo("AI_notice", "AI_notice 已在运行且无法自动接管，"
-                                             "请用任务管理器结束所有 AI_notice.exe 后重试。")
-            return
+    # 单实例(唤起式): 已有实例 -> 让它弹出窗口, 本实例退出。互杀设计已废弃。
+    if _activate_running():
+        return
 
     cleanup_legacy_autostart()
 
@@ -748,6 +759,8 @@ def main():
     app = App(watcher)
     # tkinter 回调异常同样落日志(默认行为会静默或弹 PyInstaller 错误框)
     app.report_callback_exception = lambda et, ev, tb: log(f"UI回调异常 {et.__name__}: {ev}")
+
+    _start_activation_listener(app, log)
 
     tray = Tray(app)
     threading.Thread(target=tray.run, daemon=True).start()

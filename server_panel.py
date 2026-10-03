@@ -35,9 +35,10 @@ SSH_CONFIG = os.path.expanduser("~/.ssh/config")
 PORT = 8530
 
 # 当前版本号(单一来源, exe 内嵌; version.json 仅用于 git 仓库用户的对照)
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.6.0"
 
-_lock = threading.Lock()
+# 配置/服务器列表文件读写锁: 多线程(GUI+监听+托盘)共享, 防止读半截写坏
+_io_lock = threading.Lock()
 
 
 # ---------------- 数据读写 ----------------
@@ -64,26 +65,32 @@ def load_config():
 
 
 def load_servers():
-    if os.path.exists(SERVERS_FILE):
-        try:
-            return json.load(open(SERVERS_FILE, encoding="utf-8"))
-        except Exception:
-            pass
+    with _io_lock:
+        if os.path.exists(SERVERS_FILE):
+            try:
+                return json.load(open(SERVERS_FILE, encoding="utf-8"))
+            except Exception:
+                pass
     return {"servers": []}
 
 
 def save_servers(data):
-    json.dump(data, open(SERVERS_FILE, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+    with _io_lock:
+        tmp = SERVERS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, SERVERS_FILE)
 
 
 def cfg_set(key, value):
-    """写入单个配置项到 config.json (先写临时文件再替换, 崩溃也不会写坏配置)"""
-    cfg = load_config()
-    cfg[key] = value
-    tmp = CONFIG_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, CONFIG_FILE)
+    """写入单个配置项到 config.json (加锁+先写临时文件再替换, 崩溃也不会写坏配置)"""
+    with _io_lock:
+        cfg = load_config()
+        cfg[key] = value
+        tmp = CONFIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, CONFIG_FILE)
 
 
 def get_server(name):
@@ -324,14 +331,15 @@ def api_update():
 
 def api_config(body):
     """更新本地配置(主题频道/仓库地址)"""
-    cfg = load_config()
-    for k in ("topic", "host_tag", "github_repo"):
-        if body.get(k) is not None and str(body[k]).strip():
-            val = str(body[k]).strip()
-            if k == "github_repo":
-                val = normalize_repo(val)
-            cfg[k] = val
-    json.dump(cfg, open(CONFIG_FILE, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+    with _io_lock:
+        cfg = load_config()
+        for k in ("topic", "host_tag", "github_repo"):
+            if body.get(k) is not None and str(body[k]).strip():
+                val = str(body[k]).strip()
+                if k == "github_repo":
+                    val = normalize_repo(val)
+                cfg[k] = val
+        json.dump(cfg, open(CONFIG_FILE, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
     return {"ok": True, "config": cfg}
 
 
