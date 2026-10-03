@@ -476,51 +476,104 @@ class App(ctk.CTk):
         self.run_async(worker, done)
 
     def _build_picker(self, apps):
-        from tkinter import messagebox
+        # 用原生 Listbox 渲染 (426 个 CTk 复选框会卡死界面线程)
+        import tkinter as tk
+
+        def pretty(appid):
+            """把系统长 ID 显示成人类可读名: xxx_yyy!Snipaste -> Snipaste"""
+            tail = appid.split("!")[-1] if "!" in appid else appid
+            tail = re.sub(r"^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}_", "", tail)
+            tail = re.sub(r"^[^_]+_", "", tail) if "_" in tail else tail
+            tail = re.sub(r"_\w+$", "", tail) if tail.count("_") else tail
+            return tail or appid
+
+        # 按显示名去重(保留首个 appid), 排序
+        seen, items = set(), []
+        for appid in sorted(apps):
+            name = pretty(appid)
+            if name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            items.append((name, appid))
+        items.sort(key=lambda x: x[0].lower())
+
         current = set()
         raw = self.e_filter.get().strip()
         if raw and "*" not in raw:
             current = set(k.strip().lower() for k in raw.replace("，", ",").split(",") if k.strip())
+
         win = ctk.CTkToplevel(self)
         win.title("勾选要监听的应用")
         win.geometry("560x640")
         win.grab_set()
-        ctk.CTkLabel(win, text=f"共发现 {len(apps)} 个曾发送通知的应用，勾选后点确定：",
-                     text_color=C_TXT, anchor="w").pack(fill="x", padx=14, pady=(10, 2))
-        frame = ctk.CTkScrollableFrame(win, fg_color="#FFFFFF", corner_radius=10)
-        frame.pack(fill="both", expand=True, padx=12, pady=6)
-        vars_map = []
-        for appid in apps:
-            v = ctk.BooleanVar(value=(appid.lower() in current))
-            row = ctk.CTkFrame(frame, fg_color="transparent")
-            row.pack(fill="x", padx=4, pady=1)
-            ctk.CTkCheckBox(row, text=appid, variable=v, checkbox_width=18,
-                            checkbox_height=18).pack(anchor="w")
-            vars_map.append((appid, v))
-        def apply(sel_text):
+        top = ctk.CTkFrame(win, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(10, 2))
+        ctk.CTkLabel(top, text=f"共发现 {len(items)} 个应用（已合并重名），勾选后点确定：",
+                     text_color=C_TXT, anchor="w").pack(side="left")
+        search_var = ctk.StringVar()
+        ctk.CTkEntry(top, width=160, placeholder_text="搜索…",
+                     textvariable=search_var).pack(side="right")
+
+        listbox = tk.Listbox(win, selectmode="multiple", exportselection=False,
+                             font=("Microsoft YaHei UI", 10), activestyle="none",
+                             bg="#FFFFFF", fg="#111827", highlightthickness=1,
+                             highlightbackground="#D9DDE3", relief="flat")
+        sb = tk.Scrollbar(win, command=listbox.yview)
+        listbox.configure(yscrollcommand=sb.set)
+        listbox.pack(fill="both", expand=True, padx=(14, 2), pady=4)
+        sb.pack(side="right", fill="y", padx=(0, 14))
+
+        # 勾选状态记录在 selected_names 集合(显示名 -> appid 的映射在 items 里)
+        selected_names = set()
+
+        def toggle(event):
+            sel_idx = listbox.nearest(event.y)
+            if not (0 <= sel_idx < listbox.size()):
+                return
+            line = listbox.get(sel_idx)
+            name = line[2:] if line.startswith(("☐ ", "☑ ")) else line
+            if name in selected_names:
+                selected_names.discard(name)
+            else:
+                selected_names.add(name)
+            repaint()
+
+        def repaint():
+            kw = search_var.get().strip().lower()
+            listbox.delete(0, "end")
+            for name, appid in items:
+                if kw and kw not in name.lower() and kw not in appid.lower():
+                    continue
+                mark = "☑" if name in selected_names else "☐"
+                listbox.insert("end", f"{mark} {name}")
+
+        search_var.trace_add("write", lambda *_: repaint())
+        listbox.bind("<Button-1>", toggle)
+        # 预选当前已监听的
+        for name, appid in items:
+            if appid.lower() in current:
+                selected_names.add(name)
+        repaint()
+
+        def apply():
+            # 把勾选的显示名映射回 appid
+            sel_ids = [appid for name, appid in items if name in selected_names]
+            if not sel_ids:
+                from tkinter import messagebox
+                messagebox.showinfo("提示", "一个都没勾 = 不监听任何应用。", parent=win)
+                return
             self.e_filter.delete(0, "end")
-            self.e_filter.insert(0, sel_text)
+            self.e_filter.insert(0, ",".join(sel_ids))
             self.save_filter()
             win.destroy()
-        def on_ok():
-            sel = [appid for appid, v in vars_map if v.get()]
-            if not sel:
-                messagebox.showinfo("提示", "一个都没勾 = 不监听任何应用。要监听全部请勾选 * 或点全选。", parent=win)
-                return
-            apply(",".join(sel))
-        def on_all():
-            for _, v in vars_map:
-                v.set(True)
-        def on_none():
-            for _, v in vars_map:
-                v.set(False)
         btns = ctk.CTkFrame(win, fg_color="transparent")
         btns.pack(fill="x", padx=12, pady=(0, 12))
         ctk.CTkButton(btns, text="全选", width=70, fg_color="#F3F4F6", text_color=C_TXT,
-                      hover_color="#E5E7EB", command=on_all).pack(side="left", padx=4)
+                      hover_color="#E5E7EB", command=lambda: (selected_names.update(n for n, _ in items), repaint())).pack(side="left", padx=4)
         ctk.CTkButton(btns, text="清空", width=70, fg_color="#F3F4F6", text_color=C_TXT,
-                      hover_color="#E5E7EB", command=on_none).pack(side="left")
-        ctk.CTkButton(btns, text="确定", width=90, command=on_ok).pack(side="right", padx=4)
+                      hover_color="#E5E7EB", command=lambda: (selected_names.clear(), repaint())).pack(side="left")
+        ctk.CTkButton(btns, text="确定", width=90, command=apply).pack(side="right", padx=4)
+        self.set_status(f"应用列表已就绪, 共 {len(items)} 个 (搜索框可过滤)")
 
     def refresh(self):
         """重建服务器卡片列表"""
