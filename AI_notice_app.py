@@ -515,7 +515,7 @@ class App(ctk.CTk):
         top = ctk.CTkFrame(win, fg_color="transparent")
         top.pack(fill="x", padx=14, pady=(10, 2))
         ctk.CTkLabel(top, text=f"共发现 {len(items)} 个应用（已合并重名），勾选后点确定：",
-                     text_color=C_TXT, anchor="w").pack(side="left")
+                     text_color="#111827", anchor="w").pack(side="left")
         search_var = ctk.StringVar()
         ctk.CTkEntry(top, width=160, placeholder_text="搜索…",
                      textvariable=search_var).pack(side="right")
@@ -574,9 +574,9 @@ class App(ctk.CTk):
             win.destroy()
         btns = ctk.CTkFrame(win, fg_color="transparent")
         btns.pack(fill="x", padx=12, pady=(0, 12))
-        ctk.CTkButton(btns, text="全选", width=70, fg_color="#F3F4F6", text_color=C_TXT,
+        ctk.CTkButton(btns, text="全选", width=70, fg_color="#F3F4F6", text_color="#111827",
                       hover_color="#E5E7EB", command=lambda: (selected_names.update(n for n, _ in items), repaint())).pack(side="left", padx=4)
-        ctk.CTkButton(btns, text="清空", width=70, fg_color="#F3F4F6", text_color=C_TXT,
+        ctk.CTkButton(btns, text="清空", width=70, fg_color="#F3F4F6", text_color="#111827",
                       hover_color="#E5E7EB", command=lambda: (selected_names.clear(), repaint())).pack(side="left")
         ctk.CTkButton(btns, text="确定", width=90, command=apply).pack(side="right", padx=4)
         self.set_status(f"应用列表已就绪, 共 {len(items)} 个 (搜索框可过滤)")
