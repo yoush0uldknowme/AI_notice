@@ -358,7 +358,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(row1, text="ntfy 频道", width=90, anchor="w", text_color=C_MUT).pack(side="left")
         self.e_topic = ctk.CTkEntry(row1, width=260)
         self.e_topic.pack(side="left", padx=6)
-        ctk.CTkLabel(row1, text="改动后重启软件生效", text_color=C_MUT).pack(side="left", padx=6)
+        ctk.CTkLabel(row1, text="保存后立即生效", text_color=C_MUT).pack(side="left", padx=6)
 
         row2 = ctk.CTkFrame(card, fg_color="transparent")
         row2.pack(fill="x", padx=18, pady=4)
@@ -433,10 +433,13 @@ class App(ctk.CTk):
         self.watcher.keywords = [k.strip().lower() for k in flt if k.strip()]
 
     def save_config(self):
-        core.api_config({"topic": self.e_topic.get().strip(),
-                         "github_repo": self.e_repo.get().strip()})
+        cfg = core.api_config({"topic": self.e_topic.get().strip(),
+                               "github_repo": self.e_repo.get().strip()})
+        if cfg.get("config"):
+            # 频道名热更新: 保存后监听器立即改用新频道, 无需重启
+            self.watcher.topic = cfg["config"].get("topic", self.watcher.topic)
         self.save_filter(silent=True)
-        self.set_status("配置已保存（频道名改动后重启软件生效）")
+        self.set_status("配置已保存, 监听频道已立即生效（服务器钩子需重新部署才会跟随改动）")
 
     def save_filter(self, silent=False):
         raw = self.e_filter.get().strip()

@@ -35,7 +35,7 @@ SSH_CONFIG = os.path.expanduser("~/.ssh/config")
 PORT = 8530
 
 # 当前版本号(单一来源, exe 内嵌; version.json 仅用于 git 仓库用户的对照)
-APP_VERSION = "1.4.2"
+APP_VERSION = "1.4.3"
 
 _lock = threading.Lock()
 
@@ -43,9 +43,9 @@ _lock = threading.Lock()
 # ---------------- 数据读写 ----------------
 def load_config():
     default = {
-        "topic": "",
+        "topic": "",   # 首次使用请在设置页填入自己的 ntfy 频道名
         "host_tag": socket.gethostname(),
-        "github_repo": "",   # 例如 "yourname/notice-panel"
+        "github_repo": "yoush0uldknowme/AI_notice",  # 默认检查上游仓库更新
     }
     cfg = {}
     if os.path.exists(CONFIG_FILE):
