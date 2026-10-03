@@ -514,7 +514,7 @@ class App(ctk.CTk):
         win.grab_set()
         top = ctk.CTkFrame(win, fg_color="transparent")
         top.pack(fill="x", padx=14, pady=(10, 2))
-        ctk.CTkLabel(top, text=f"共发现 {len(items)} 个应用（已合并重名），勾选后点确定：",
+        ctk.CTkLabel(top, text=f"共发现 {len(items)} 个应用（已合并重名）。勾选会追加到现有关键词：",
                      text_color="#111827", anchor="w").pack(side="left")
         search_var = ctk.StringVar()
         ctk.CTkEntry(top, width=160, placeholder_text="搜索…",
@@ -562,15 +562,27 @@ class App(ctk.CTk):
         repaint()
 
         def apply():
-            # 把勾选的显示名映射回 appid
+            # 追加模式: 勾选的应用合并进现有关键词(去重), 不顶掉已填的
             sel_ids = [appid for name, appid in items if name in selected_names]
             if not sel_ids:
                 from tkinter import messagebox
                 messagebox.showinfo("提示", "一个都没勾 = 不监听任何应用。", parent=win)
                 return
+            raw = self.e_filter.get().strip()
+            existing = ([k.strip() for k in raw.replace("，", ",").split(",") if k.strip()]
+                        if raw and "*" not in raw else [])
+            merged = list(existing)
+            added = 0
+            for appid in sel_ids:
+                aid = appid.lower()
+                # 已有关键词能覆盖到这个应用(子串匹配)就不重复添加
+                if not any(k.lower() in aid or aid in k.lower() for k in merged):
+                    merged.append(appid)
+                    added += 1
             self.e_filter.delete(0, "end")
-            self.e_filter.insert(0, ",".join(sel_ids))
-            self.save_filter()
+            self.e_filter.insert(0, ",".join(merged))
+            self.save_filter(silent=True)
+            self.set_status(f"已追加 {added} 个应用, 共监听 {len(merged)} 项")
             win.destroy()
         btns = ctk.CTkFrame(win, fg_color="transparent")
         btns.pack(fill="x", padx=12, pady=(0, 12))
