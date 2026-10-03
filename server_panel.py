@@ -35,7 +35,7 @@ SSH_CONFIG = os.path.expanduser("~/.ssh/config")
 PORT = 8530
 
 # 当前版本号(单一来源, exe 内嵌; version.json 仅用于 git 仓库用户的对照)
-APP_VERSION = "1.4.4"
+APP_VERSION = "1.5.0"
 
 _lock = threading.Lock()
 
@@ -77,10 +77,13 @@ def save_servers(data):
 
 
 def cfg_set(key, value):
-    """写入单个配置项到 config.json"""
+    """写入单个配置项到 config.json (先写临时文件再替换, 崩溃也不会写坏配置)"""
     cfg = load_config()
     cfg[key] = value
-    json.dump(cfg, open(CONFIG_FILE, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, CONFIG_FILE)
 
 
 def get_server(name):

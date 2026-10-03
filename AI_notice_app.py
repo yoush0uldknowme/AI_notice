@@ -134,7 +134,7 @@ class Watcher:
     def _send(self, app, title, body):
         if not self.topic:
             self.log_fn("未配置 ntfy 频道, 跳过发送 (请在设置页填写)")
-            return
+            return False
         payload = json.dumps({"topic": self.topic,
                               "title": f"{socket.gethostname()} | {app}",
                               "message": (body or title or "").strip()[:200],
@@ -142,6 +142,18 @@ class Watcher:
         req = urllib.request.Request("https://ntfy.sh", data=payload,
                                      headers={"Content-Type": "application/json"}, method="POST")
         urllib.request.urlopen(req, timeout=15).read()
+        return True
+
+    def list_known_apps(self):
+        """从通知数据库列出所有曾发过通知的应用(供勾选界面用)"""
+        if not self._copy_db():
+            raise RuntimeError("无法读取系统通知数据库")
+        import sqlite3
+        con = sqlite3.connect(os.path.join(self.tmp, "wpndatabase.db"))
+        rows = con.execute(
+            'SELECT DISTINCT PrimaryId FROM NotificationHandler ORDER BY PrimaryId').fetchall()
+        con.close()
+        return [r[0] for r in rows if r[0]]
 
     def loop(self):
         self.log_fn("后台监听线程已启动")
@@ -176,8 +188,8 @@ class Watcher:
                         a = app.lower()
                         if "*" in self.keywords or any(k in a for k in self.keywords):
                             try:
-                                self._send(app, title, body)
-                                self.log_fn(f"已转发: {app} | {title}")
+                                if self._send(app, title, body):
+                                    self.log_fn(f"已转发: {app} | {title}")
                             except Exception as e:
                                 self.log_fn(f"转发失败({app}): {e}")
                     last_order = max(last_order or 0, max_seen)
@@ -342,7 +354,8 @@ class App(ctk.CTk):
         self.e_filter = ctk.CTkEntry(row0, width=320)
         self.e_filter.pack(side="left", padx=6)
         ctk.CTkButton(row0, text="保存关键词", width=90, command=self.save_filter).pack(side="left", padx=6)
-        ctk.CTkLabel(card, text="应用名含关键词才转发；填 * 转发全部应用。逗号分隔，保存后立即生效。",
+        ctk.CTkButton(row0, text="勾选应用…", width=90, command=self.pick_apps_dialog).pack(side="left")
+        ctk.CTkLabel(card, text="应用名含关键词才转发；填 * 转发全部应用。也可点「勾选应用」从电脑通知记录里直接挑。保存后立即生效。",
                      text_color=C_MUT).pack(anchor="w", padx=18)
 
         ctk.CTkLabel(card, text="常规", font=("Microsoft YaHei UI", 13, "bold"),
@@ -433,14 +446,81 @@ class App(ctk.CTk):
         self.set_status("配置已保存, 监听频道已立即生效（服务器钩子需重新部署才会跟随改动）")
 
     def save_filter(self, silent=False):
+        try:
+            raw = self.e_filter.get().strip()
+            flt = [k.strip() for k in raw.replace("，", ",").split(",") if k.strip()]
+            if not flt:
+                flt = ["*"]
+            core.cfg_set("filter", flt)
+            self.watcher.keywords = [k.lower() for k in flt]
+            if not silent:
+                self.set_status(f"监听关键词已更新: {flt}")
+        except Exception as e:
+            # 配置写失败绝不拖垮界面: 提示并保留原值
+            self.set_status(f"保存关键词失败: {e}")
+
+    def pick_apps_dialog(self):
+        """从电脑通知记录里勾选要监听的应用"""
+        from tkinter import messagebox
+        self.set_status("正在扫描电脑通知应用列表…")
+        def worker():
+            try:
+                return {"ok": True, "apps": self.watcher.list_known_apps()}
+            except Exception as e:
+                return {"ok": False, "error": str(e)}
+        def done(r):
+            if not r.get("ok"):
+                self.set_status(f"扫描失败: {r.get('error', '')}（需要电脑上有过通知记录）")
+                return
+            self._build_picker(r["apps"])
+        self.run_async(worker, done)
+
+    def _build_picker(self, apps):
+        from tkinter import messagebox
+        current = set()
         raw = self.e_filter.get().strip()
-        flt = [k.strip() for k in raw.replace("，", ",").split(",") if k.strip()]
-        if not flt:
-            flt = ["*"]
-        core.cfg_set("filter", flt)
-        self.watcher.keywords = [k.lower() for k in flt]
-        if not silent:
-            self.set_status(f"监听关键词已更新: {flt}")
+        if raw and "*" not in raw:
+            current = set(k.strip().lower() for k in raw.replace("，", ",").split(",") if k.strip())
+        win = ctk.CTkToplevel(self)
+        win.title("勾选要监听的应用")
+        win.geometry("560x640")
+        win.grab_set()
+        ctk.CTkLabel(win, text=f"共发现 {len(apps)} 个曾发送通知的应用，勾选后点确定：",
+                     text_color=C_TXT, anchor="w").pack(fill="x", padx=14, pady=(10, 2))
+        frame = ctk.CTkScrollableFrame(win, fg_color="#FFFFFF", corner_radius=10)
+        frame.pack(fill="both", expand=True, padx=12, pady=6)
+        vars_map = []
+        for appid in apps:
+            v = ctk.BooleanVar(value=(appid.lower() in current))
+            row = ctk.CTkFrame(frame, fg_color="transparent")
+            row.pack(fill="x", padx=4, pady=1)
+            ctk.CTkCheckBox(row, text=appid, variable=v, checkbox_width=18,
+                            checkbox_height=18).pack(anchor="w")
+            vars_map.append((appid, v))
+        def apply(sel_text):
+            self.e_filter.delete(0, "end")
+            self.e_filter.insert(0, sel_text)
+            self.save_filter()
+            win.destroy()
+        def on_ok():
+            sel = [appid for appid, v in vars_map if v.get()]
+            if not sel:
+                messagebox.showinfo("提示", "一个都没勾 = 不监听任何应用。要监听全部请勾选 * 或点全选。", parent=win)
+                return
+            apply(",".join(sel))
+        def on_all():
+            for _, v in vars_map:
+                v.set(True)
+        def on_none():
+            for _, v in vars_map:
+                v.set(False)
+        btns = ctk.CTkFrame(win, fg_color="transparent")
+        btns.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(btns, text="全选", width=70, fg_color="#F3F4F6", text_color=C_TXT,
+                      hover_color="#E5E7EB", command=on_all).pack(side="left", padx=4)
+        ctk.CTkButton(btns, text="清空", width=70, fg_color="#F3F4F6", text_color=C_TXT,
+                      hover_color="#E5E7EB", command=on_none).pack(side="left")
+        ctk.CTkButton(btns, text="确定", width=90, command=on_ok).pack(side="right", padx=4)
 
     def refresh(self):
         """重建服务器卡片列表"""
@@ -604,14 +684,17 @@ def main():
         except Exception:
             pass
 
+    # 全局异常钩子: 任何未处理异常都写进日志, 界面保持可用, 不再"黑箱卡死"
+    def _unhandled(t, v, tb):
+        log(f"未处理异常 {t.__name__}: {v}")
+    sys.excepthook = _unhandled
+
     watcher = Watcher(topic, flt, log)
     threading.Thread(target=watcher.loop, daemon=True).start()
 
     app = App(watcher)
-
-    def save_filter_cmd():
-        app.save_filter()
-        app.watcher.keywords = [k.strip().lower() for k in app.e_filter.get().split(",") if k.strip()]
+    # tkinter 回调异常同样落日志(默认行为会静默或弹 PyInstaller 错误框)
+    app.report_callback_exception = lambda et, ev, tb: log(f"UI回调异常 {et.__name__}: {ev}")
 
     tray = Tray(app)
     threading.Thread(target=tray.run, daemon=True).start()
