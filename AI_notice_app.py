@@ -360,13 +360,6 @@ class App(ctk.CTk):
         self.e_topic.pack(side="left", padx=6)
         ctk.CTkLabel(row1, text="保存后立即生效", text_color=C_MUT).pack(side="left", padx=6)
 
-        row2 = ctk.CTkFrame(card, fg_color="transparent")
-        row2.pack(fill="x", padx=18, pady=4)
-        ctk.CTkLabel(row2, text="GitHub 仓库", width=90, anchor="w", text_color=C_MUT).pack(side="left")
-        self.e_repo = ctk.CTkEntry(row2, width=260)
-        self.e_repo.pack(side="left", padx=6)
-        ctk.CTkLabel(row2, text="用于检查更新", text_color=C_MUT).pack(side="left", padx=6)
-
         ctk.CTkButton(card, text="保存配置", command=self.save_config).pack(anchor="w", padx=18,
                                                                            pady=(8, 16))
 
@@ -427,14 +420,12 @@ class App(ctk.CTk):
     def load_config_fields(self):
         cfg = core.load_config()
         self.e_topic.delete(0, "end"); self.e_topic.insert(0, cfg.get("topic", ""))
-        self.e_repo.delete(0, "end"); self.e_repo.insert(0, cfg.get("github_repo", ""))
         flt = cfg.get("filter") or DEFAULT_FILTER
         self.e_filter.delete(0, "end"); self.e_filter.insert(0, ",".join(flt))
         self.watcher.keywords = [k.strip().lower() for k in flt if k.strip()]
 
     def save_config(self):
-        cfg = core.api_config({"topic": self.e_topic.get().strip(),
-                               "github_repo": self.e_repo.get().strip()})
+        cfg = core.api_config({"topic": self.e_topic.get().strip()})
         if cfg.get("config"):
             # 频道名热更新: 保存后监听器立即改用新频道, 无需重启
             self.watcher.topic = cfg["config"].get("topic", self.watcher.topic)

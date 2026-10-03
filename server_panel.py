@@ -35,7 +35,7 @@ SSH_CONFIG = os.path.expanduser("~/.ssh/config")
 PORT = 8530
 
 # 当前版本号(单一来源, exe 内嵌; version.json 仅用于 git 仓库用户的对照)
-APP_VERSION = "1.4.3"
+APP_VERSION = "1.4.4"
 
 _lock = threading.Lock()
 
